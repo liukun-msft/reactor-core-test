@@ -4,65 +4,49 @@ import reactor.core.publisher.Sinks;
 
 import java.util.concurrent.TimeUnit;
 
+import static reactor.core.publisher.Sinks.EmitFailureHandler.FAIL_FAST;
+
 public class KillSubscriberThread {
-
-    static class Source {
-        Sinks.Many<Integer> downstream;
-
-        public void generate(int data) {
-            Sinks.EmitResult result = downstream.tryEmitNext(data);
-
-            //We can use currentSubscriberCount() to know current subscriber on this sink
-            if (result != Sinks.EmitResult.OK) {
-                System.out.printf("[%s] emit failure, result [%s], current subscriber[%s] \n", Thread.currentThread().getName(), result, downstream.currentSubscriberCount());
-            } else {
-                System.out.printf("[%s] emit success, current subscriber[%s]\n", Thread.currentThread().getName(), downstream.currentSubscriberCount());
-            }
-        }
-
-        public void setDownstream(Sinks.Many<Integer> downstream) {
-            this.downstream = downstream;
-        }
-    }
-
-    static class Receiver {
-        public Iterable<Integer> receive(Source source) {
-            Sinks.Many<Integer> emitter = Sinks.many().replay().all();
-            source.setDownstream(emitter);
-            return emitter.asFlux().toIterable();
-        }
-    }
-
     public static void main(String[] args) throws InterruptedException {
-        Source source = new Source();
-        Receiver receiver = new Receiver();
-        Thread t = createThreadToReceive(source, receiver);
+        Sinks.Many<Integer> sinks = Sinks.many().replay().all();
+        Thread t = createThreadToIterate(sinks);
+//        Thread t = createThreadToSubscribe(sinks);
         t.start();
 
-
-        //Wait downstream set to source
+        //Wait subscribed
         TimeUnit.SECONDS.sleep(1);
+        System.out.printf("[%s] Current subscriber count: %d \n", Thread.currentThread().getName(), sinks.currentSubscriberCount());
 
-        source.generate(1);
-        source.generate(2);
-        //Will kill receive thread
-        source.generate(3);
+        sinks.emitNext(1, FAIL_FAST);
+        sinks.emitNext(2, FAIL_FAST);
+        sinks.emitNext(3, FAIL_FAST);
 
-        //Still could emit after receive thread killed
-        //But the subscriber number change to 0
-        TimeUnit.SECONDS.sleep(3);
-        source.generate(4);
-        source.generate(5);
+        //Wait Thread killed
+        TimeUnit.SECONDS.sleep(2);
 
+        //When use toIterable(), the subscriber count is 1, but no data received since thread is killed.
+        //When use subscribe(), the subscriber count is 0
+        System.out.printf("[%s] Current subscriber count: %d \n", Thread.currentThread().getName(), sinks.currentSubscriberCount());
+        sinks.emitNext(4, FAIL_FAST);
+        sinks.emitNext(5, FAIL_FAST);
     }
 
-    private static Thread createThreadToReceive(Source source, Receiver receiver) {
+    private static Thread createThreadToSubscribe(Sinks.Many<Integer> sinks) {
         return new Thread(() -> {
+            sinks.asFlux().subscribe(data -> {
+                System.out.printf("[%s] Receive index: %d \n", Thread.currentThread().getName(), data);
+                if(data == 3) {
+                    throw new IllegalStateException("kill current thread");
+                }
+            });
+        });
+    }
 
-            for (Integer i : receiver.receive(source)) {
-                System.out.printf("[%s] Receive index: %d \n", Thread.currentThread().getName(), i);
-                if (i == 3) {
-
+    private static Thread createThreadToIterate(Sinks.Many<Integer> sinks) {
+        return new Thread(() -> {
+            for (Integer data : sinks.asFlux().toIterable()) {
+                System.out.printf("[%s] Receive index: %d \n", Thread.currentThread().getName(), data);
+                if (data == 3) {
                     //NOTE: Throw exception to kill the thread  won't unsubscribe current subscriber
                     throw new IllegalStateException("kill thread by exception");
 
@@ -72,5 +56,4 @@ public class KillSubscriberThread {
             }
         });
     }
-
 }
