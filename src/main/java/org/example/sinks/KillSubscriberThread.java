@@ -35,8 +35,10 @@ public class KillSubscriberThread {
 
     public static void main(String[] args) throws InterruptedException {
         Source source = new Source();
-        Thread t = createThreadToReceive(source);
+        Receiver receiver = new Receiver();
+        Thread t = createThreadToReceive(source, receiver);
         t.start();
+
 
         //Wait downstream set to source
         TimeUnit.SECONDS.sleep(1);
@@ -54,13 +56,18 @@ public class KillSubscriberThread {
 
     }
 
-    private static Thread createThreadToReceive(Source source) {
+    private static Thread createThreadToReceive(Source source, Receiver receiver) {
         return new Thread(() -> {
-            Receiver receiver = new Receiver();
+
             for (Integer i : receiver.receive(source)) {
                 System.out.printf("[%s] Receive index: %d \n", Thread.currentThread().getName(), i);
                 if (i == 3) {
-                    Thread.currentThread().interrupt();
+
+                    //NOTE: Throw exception to kill the thread  won't unsubscribe current subscriber
+                    throw new IllegalStateException("kill thread by exception");
+
+                    //Interrupt thread will unsubscribe current subscriber
+                    //Thread.currentThread().interrupt();
                 }
             }
         });
