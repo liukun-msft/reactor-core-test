@@ -8,6 +8,7 @@ import org.slf4j.LoggerFactory;
 import reactor.core.CoreSubscriber;
 import reactor.core.Disposables;
 import reactor.core.publisher.DirectProcessor;
+import reactor.core.publisher.EmitterProcessor;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.FluxSink;
 import reactor.core.publisher.Mono;
@@ -17,9 +18,15 @@ import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 
 import java.time.Duration;
+import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 import static reactor.core.publisher.Sinks.EmitFailureHandler.FAIL_FAST;
+import static reactor.core.scheduler.Schedulers.DEFAULT_BOUNDED_ELASTIC_QUEUESIZE;
+import static reactor.core.scheduler.Schedulers.DEFAULT_BOUNDED_ELASTIC_SIZE;
 
 public class DoOnRequestTest {
 
@@ -113,7 +120,7 @@ public class DoOnRequestTest {
                 .flatMapMany(link -> flux1)
                 .publishOn(scheduler, 1);
 
-        flux2.subscribe(subscriber);
+        flux2.subscribeOn(scheduler).subscribe(subscriber);
 
         sinks.emitNext("First Data", FAIL_FAST);
         sinks.emitNext("Second Data", FAIL_FAST);
@@ -125,14 +132,10 @@ public class DoOnRequestTest {
 
 
     @Test
-    public void testWithConcat() throws InterruptedException {
+    public void testEmitterProcessor() throws InterruptedException {
         Scheduler scheduler = Schedulers.newBoundedElastic(5, 5, "receiver-");
-
-        MonoProcessor<String> cancelReceiveProcessor = MonoProcessor.create();
-        DirectProcessor<String> messageReceivedEmitter = DirectProcessor.create();
-        FluxSink<String> messageReceivedSink = messageReceivedEmitter.sink(FluxSink.OverflowStrategy.BUFFER);
-
         Sinks.Many<String> sinks = Sinks.many().replay().all();
+
         Flux<String> flux1 = sinks.asFlux()
                 .publishOn(Schedulers.boundedElastic())
                 .publishOn(scheduler)
@@ -142,36 +145,74 @@ public class DoOnRequestTest {
                 .doOnRequest(request -> {
                     logger.info("Flux1 - doOnRequest called, request number: " + request);
                 })
-                .takeUntilOther(cancelReceiveProcessor)
                 .doOnNext(message -> {
                     logger.info("Flux1 - doOnNext called, received message : " + message);
+                })
+//                .publishOn(scheduler, 1)
+                .log();
 
-                    messageReceivedSink.next("token");
-                }).publishOn(scheduler, 1);
-//                .log();
 
-        Flux<String> merged = Flux.concat(flux1, cancelReceiveProcessor);
+        Flux<String> flux2 = Mono.defer(() -> Mono.just("active link 1"))
+                .flatMapMany(link -> flux1.doFinally(message -> logger.info("finally")));
+//                .publishOn(scheduler, 1);
 
-        Flux.switchOnNext(messageReceivedEmitter
-                        .map((String lockToken) -> Mono.delay(Duration.ofSeconds(2))))
-                .subscribe(item -> {
-                    cancelReceiveProcessor.onComplete();
+        EmitterProcessor<Flux<String>> processor = EmitterProcessor.create(5, false);
+        FluxSink<Flux<String>> sessionReceiveSink;
+        sessionReceiveSink = processor.sink();
+        sessionReceiveSink.next(flux2);
+
+        Flux<String> merged = Flux.merge(processor,1).log();
+
+        merged.subscribe(subscriber);
+
+        new Thread(() -> {
+            logger.info("-------------- emit data ---------");
+            sinks.emitNext("First Data", FAIL_FAST);
+            sinks.emitNext("Second Data", FAIL_FAST);
+            sinks.emitNext("Third Data", FAIL_FAST);
+        }).start();
+
+        TimeUnit.SECONDS.sleep(5);
+    }
+
+    @Test
+    public void testSinks() throws InterruptedException {
+        Scheduler scheduler = Schedulers.newBoundedElastic(2, 2, "receiver-");
+        Sinks.Many<String> sinks = Sinks.many().replay().all();
+
+        Flux<String> flux1 = sinks.asFlux()
+                .publishOn(Schedulers.boundedElastic())
+                .publishOn(scheduler)
+                .doOnSubscribe(subscription -> {
+                    logger.info("Flux1 - doOnSubscribe called");
+                })
+                .doOnRequest(request -> {
+                    logger.info("Flux1 - doOnRequest called, request number: " + request);
+                })
+                .doOnNext(message -> {
+                    logger.info("Flux1 - doOnNext called, received message : " + message);
                 });
 
-        Sinks.One<String> mono = Sinks.one();
 
-        Flux<String> flux2 = mono.asMono()
-                .flatMapMany(link -> merged)
-                .publishOn(scheduler, 1);
+        Flux<String> flux2 = Mono.defer(() -> Mono.just("Active link 1"))
+                .flatMapMany(link -> flux1)
+                .publishOn(scheduler,1);
+//                .log();
+//                .map(message -> message);
 
-        flux2.subscribe(subscriber);
+        Sinks.Many<Flux<String>> processor = Sinks.many().replay().all();
+        processor.tryEmitNext(flux2);
 
-        mono.tryEmitValue("Active link 1");
+        Flux<String> merged = Flux.merge(processor.asFlux(),2).log();
 
-        sinks.emitNext("First Data", FAIL_FAST);
-        sinks.emitNext("Second Data", FAIL_FAST);
-        sinks.emitNext("Third Data", FAIL_FAST);
+        merged.subscribe(subscriber);
 
+        new Thread(() -> {
+            logger.info("-------------- emit data ---------");
+            sinks.emitNext("First Data", FAIL_FAST);
+            sinks.emitNext("Second Data", FAIL_FAST);
+            sinks.emitNext("Third Data", FAIL_FAST);
+        }).start();
 
         TimeUnit.SECONDS.sleep(5);
     }
