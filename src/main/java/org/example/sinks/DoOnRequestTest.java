@@ -177,7 +177,7 @@ public class DoOnRequestTest {
 
     @Test
     public void testSinks() throws InterruptedException {
-        Scheduler scheduler = Schedulers.newBoundedElastic(2, 2, "receiver-");
+        Scheduler scheduler = Schedulers.newBoundedElastic(5, 5, "receiver-");
         Sinks.Many<String> sinks = Sinks.many().replay().all();
 
         Flux<String> flux1 = sinks.asFlux()
@@ -202,8 +202,9 @@ public class DoOnRequestTest {
 
         Sinks.Many<Flux<String>> processor = Sinks.many().replay().all();
         processor.tryEmitNext(flux2);
+//        processor.tryEmitNext(flux2);
 
-        Flux<String> merged = Flux.merge(processor.asFlux(),2).log();
+        Flux<String> merged = Flux.merge(processor.asFlux(),1).log();
 
         merged.subscribe(subscriber);
 
@@ -214,8 +215,131 @@ public class DoOnRequestTest {
             sinks.emitNext("Third Data", FAIL_FAST);
         }).start();
 
-        TimeUnit.SECONDS.sleep(5);
+        TimeUnit.SECONDS.sleep(300);
     }
 
+    @Test
+    public void testPublishOnWithMerge() throws InterruptedException {
+        Scheduler scheduler = Schedulers.newBoundedElastic(5, 5, "receiver-");
+
+        Sinks.Many<String> messageSinks = Sinks.many().replay().all();
+
+        Flux<String> receivedMessagesFlux = messageSinks.asFlux()
+                .doOnSubscribe(subscription -> {
+                    logger.info("receivedMessagesFlux - doOnSubscribe called");
+                })
+                .doOnRequest(request -> {
+                    logger.info("receivedMessagesFlux - doOnRequest called, request number: " + request);
+                })
+                .doOnNext(message -> {
+                    logger.info("receivedMessagesFlux - Received message : " + message);
+                })
+                .limitRate(1);
+//                .log();
+
+
+        Flux<String> sessionFlux = Mono.defer(() -> Mono.just("Active link 1 "))
+                .publishOn(scheduler)
+                .map(link -> link + "On session")
+                .flatMapMany(link -> receivedMessagesFlux);
+//                .limitRate(1);
+//                .publishOn(scheduler, 1)
+//                .map(message -> message);
+//                .log();
+
+        Sinks.Many<Flux<String>> processor = Sinks.many().replay().all();
+
+        Flux<String> receiveFlux = Flux.merge(processor.asFlux(),1);
+
+        receiveFlux.subscribe(subscriber);
+
+        processor.tryEmitNext(sessionFlux);
+
+
+        logger.info("-------------- emit messages ------------");
+        messageSinks.emitNext("First Data", FAIL_FAST);
+        messageSinks.emitNext("Second Data", FAIL_FAST);
+        messageSinks.emitNext("Third Data", FAIL_FAST);
+
+
+        TimeUnit.SECONDS.sleep(300);
+    }
+
+
+    @Test
+    public void testPublishOn() throws InterruptedException {
+        Scheduler scheduler = Schedulers.newBoundedElastic(5, 5, "receiver-");
+
+        Sinks.Many<String> messageSinks = Sinks.many().replay().all();
+
+        Flux<String> receivedMessagesFlux = messageSinks.asFlux()
+                .doOnSubscribe(subscription -> {
+                    logger.info("receivedMessagesFlux - doOnSubscribe called");
+                })
+                .doOnRequest(request -> {
+                    logger.info("receivedMessagesFlux - doOnRequest called, request number: " + request);
+                })
+                .doOnNext(message -> {
+                    logger.info("receivedMessagesFlux - Received message : " + message);
+                })
+                .publishOn(scheduler, 1);
+
+
+        receivedMessagesFlux.subscribe(subscriber);
+
+        logger.info("-------------- emit messages ------------");
+        messageSinks.emitNext("First Data", FAIL_FAST);
+        messageSinks.emitNext("Second Data", FAIL_FAST);
+        messageSinks.emitNext("Third Data", FAIL_FAST);
+
+
+        TimeUnit.SECONDS.sleep(300);
+    }
+
+
+    @Test
+    public void testMergeonConcurrency() throws InterruptedException {
+        Scheduler scheduler = Schedulers.newBoundedElastic(5, 5, "receiver-");
+        Sinks.Many<String> sinks = Sinks.many().replay().all();
+
+        Flux<String> flux1 = sinks.asFlux()
+//                .publishOn(scheduler)
+                .doOnSubscribe(subscription -> {
+                    logger.info("Flux1 - doOnSubscribe called");
+                })
+                .doOnRequest(request -> {
+                    logger.info("Flux1 - doOnRequest called, request number: " + request);
+                })
+                .doOnNext(message -> {
+                    logger.info("Flux1 - doOnNext called, received message : " + message);
+                });
+//                .limitRate(1);
+
+//                .log();
+
+
+        Flux<String> flux2 = Mono.defer(() -> Mono.just("Active link 1"))
+                .flatMapMany(link -> flux1)
+                .publishOn(scheduler, 1)
+//                .log();
+                .map(message -> message);
+
+        Sinks.Many<Flux<String>> processor = Sinks.many().replay().all();
+        processor.tryEmitNext(flux2);
+        processor.tryEmitNext(flux2);
+
+        Flux<String> merged = Flux.merge(processor.asFlux());
+
+        merged.subscribe(subscriber);
+
+        new Thread(() -> {
+            logger.info("-------------- emit data ---------");
+            sinks.emitNext("First Data", FAIL_FAST);
+            sinks.emitNext("Second Data", FAIL_FAST);
+            sinks.emitNext("Third Data", FAIL_FAST);
+        }).start();
+
+        TimeUnit.SECONDS.sleep(300);
+    }
 
 }
