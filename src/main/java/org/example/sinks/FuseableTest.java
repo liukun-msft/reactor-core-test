@@ -14,6 +14,7 @@ public class FuseableTest {
     @Test
     public void testFlux(){
         Flux.just(1, 2, 3)
+                .map(data -> data + 1)
                 .subscribe(data -> logger.info("Data:" + data));
     }
 
@@ -59,9 +60,10 @@ public class FuseableTest {
         Flux<Integer> source = Flux.just(1, 2, 3)
                 .doOnRequest(request -> logger.info("--- Request: " + request))
                 .doOnNext(data -> logger.info("send data: " + data))
-                .publishOn(Schedulers.boundedElastic(), 1);
+                .publishOn(Schedulers.boundedElastic(), 1)
+                .map(message -> message);
 
-        Flux<Flux<Integer>> sourceSinks = Flux.just(source, source);
+        Flux<Flux<Integer>> sourceSinks = Flux.just(source);
 
         Flux.merge(sourceSinks, 1).subscribe(data -> logger.info("Finished Process Data:" + data));;
 
@@ -74,13 +76,28 @@ public class FuseableTest {
         Flux<Integer> source = Flux.just(1, 2, 3)
                 .doOnRequest(request -> logger.info("--- Request: " + request))
                 .doOnNext(data -> logger.info("send data: " + data))
-                .publishOn(Schedulers.boundedElastic(), 1);
+                .publishOn(Schedulers.boundedElastic(), 1)
+                .map(message -> message);
 
-        Flux<Flux<Integer>> sourceSinks = Flux.just(source, source);
+        Flux<Integer> source2 = Flux.just(4, 5, 6)
+                .doOnRequest(request -> logger.info("--- Request: " + request))
+                .doOnNext(data -> logger.info("send data: " + data))
+                .publishOn(Schedulers.boundedElastic(), 1)
+                .map(message -> message);
 
-        Flux.merge(sourceSinks, 2).subscribe(data -> logger.info("Finished Process Data:" + data));;
+        Flux<Flux<Integer>> sourceSinks = Flux.just(source, source2);
 
-        TimeUnit.SECONDS.sleep(1);
+        Flux.merge(sourceSinks, 2).subscribe(data -> {
+            logger.info("Finished Process Data:" + data);
+            try {
+                TimeUnit.SECONDS.sleep(1);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+
+        });;
+
+        TimeUnit.SECONDS.sleep(5);
     }
 
 }
