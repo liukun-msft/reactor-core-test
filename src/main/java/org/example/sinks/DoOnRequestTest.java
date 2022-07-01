@@ -342,4 +342,38 @@ public class DoOnRequestTest {
         TimeUnit.SECONDS.sleep(300);
     }
 
+    @Test
+    public void testDoOnRequests() throws InterruptedException {
+        Scheduler scheduler = Schedulers.newBoundedElastic(5, 5, "receiver-");
+
+        Sinks.Many<String> messageSinks = Sinks.many().replay().all();
+
+        Flux<String> receivedMessagesFlux = messageSinks.asFlux()
+                .doOnSubscribe(subscription -> {
+                    logger.info("receivedMessagesFlux - doOnSubscribe called");
+                })
+                .doOnRequest(request -> {
+                    logger.info("receivedMessagesFlux - doOnRequest called, request number: " + request);
+                })
+                .publishOn(scheduler, 32)
+                .doOnNext(message -> {
+                    logger.info("receivedMessagesFlux - Received message : " + message);
+                })
+                .doOnRequest(request -> {
+                    logger.info("receivedMessagesFlux - doOnRequest called, request number: " + request);
+                })
+                .publishOn(scheduler, 1);
+
+
+        receivedMessagesFlux.subscribe(subscriber);
+
+        logger.info("-------------- emit messages ------------");
+        messageSinks.emitNext("First Data", FAIL_FAST);
+        messageSinks.emitNext("Second Data", FAIL_FAST);
+        messageSinks.emitNext("Third Data", FAIL_FAST);
+
+
+        TimeUnit.SECONDS.sleep(300);
+    }
+
 }
