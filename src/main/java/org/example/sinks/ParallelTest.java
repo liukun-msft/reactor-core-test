@@ -1,26 +1,21 @@
 package org.example.sinks;
 
 import org.junit.Test;
-import org.reactivestreams.Subscriber;
 import org.reactivestreams.Subscription;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.CoreSubscriber;
 import reactor.core.publisher.Flux;
-import reactor.core.publisher.FluxProcessor;
-import reactor.core.publisher.Signal;
-import reactor.core.publisher.Sinks;
+import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 import java.util.concurrent.TimeUnit;
-
-import static reactor.core.publisher.Sinks.EmitFailureHandler.FAIL_FAST;
 
 public class ParallelTest {
 
     private static final Logger logger = LoggerFactory.getLogger(ParallelTest.class);
 
-    // Problem: internally prefetch one more message
+    // Problem 1: internally prefetch one more message
     @Test
     public void testParallelPrefetch() throws InterruptedException {
         Flux.just(1, 2, 3, 4, 5, 6, 7)
@@ -40,6 +35,54 @@ public class ParallelTest {
 
         TimeUnit.SECONDS.sleep(10);
     }
+
+    // Problem 2: internally prefetch two more message
+    @Test
+    public void testParallelPrefetchWithLimitRate() throws InterruptedException {
+        Flux.just(1, 2, 3, 4, 5, 6, 7)
+                .doOnRequest(request -> logger.info("--- Request: " + request))
+                .doOnNext(data -> logger.info("send data: " + data))
+                /*  Add limitRate */
+                .limitRate(1)
+                .map(data -> data) // prefetch one message if we comment this line out
+
+                .parallel(2, 1)
+                .log()
+                .runOn(Schedulers.boundedElastic(), 1)
+                .subscribe(data -> {
+                    try {
+                        TimeUnit.SECONDS.sleep(1);
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
+                    logger.info("Finished Process Data:" + data);
+                });
+
+        TimeUnit.SECONDS.sleep(10);
+    }
+
+
+    // Fix 1: use flatmap to replace parallel and remove limitRate
+    @Test
+    public void testFlatMap() throws InterruptedException {
+        Flux.just(1, 2, 3, 4, 5, 6, 7)
+                .doOnRequest(request -> logger.info("--- Request: " + request))
+                .doOnNext(data -> logger.info("send data: " + data))
+                //.limitRate(1)
+                .flatMap(data -> Mono.fromRunnable(() -> {
+                            try {
+                                TimeUnit.SECONDS.sleep(1);
+                            } catch (InterruptedException e) {
+                                e.printStackTrace();
+                            }
+                            logger.info("Finished Process Data:" + data);
+                        })
+                        .publishOn(Schedulers.boundedElastic()), 2)
+                .log()
+                .subscribe();
+
+        TimeUnit.SECONDS.sleep(10);
+}
 
 
     @Test
@@ -93,53 +136,6 @@ public class ParallelTest {
         TimeUnit.SECONDS.sleep(10);
     }
 
-    private class LinkProcessor extends FluxProcessor<String, Integer>
-            implements Subscription {
-
-        private Subscription upstream = null;
-
-        @Override
-        public void onSubscribe(Subscription subscription) {
-            this.upstream = subscription;
-            subscription.request(1);
-        }
-
-        @Override
-        public void onNext(String link) {
-            try {
-                TimeUnit.SECONDS.sleep(1);
-            } catch (InterruptedException e) {
-                e.printStackTrace();
-            }
-            logger.info("Create a new link" + link);
-            upstream.request(1);
-        }
-
-        @Override
-        public void onError(Throwable throwable) {
-            logger.info("Error receiving.", throwable);
-        }
-
-        @Override
-        public void onComplete() {
-            logger.info("Completed receiving.");
-        }
-
-        @Override
-        public void request(long l) {
-            
-        }
-
-        @Override
-        public void cancel() {
-
-        }
-
-        @Override
-        public void subscribe(CoreSubscriber<? super Integer> downstream) {
-            downstream.onSubscribe(this);
-        }
-    }
     @Test
     public void testPublishOnDifferent() throws InterruptedException {
         Flux.just(1, 2, 3, 4, 5)
@@ -156,41 +152,5 @@ public class ParallelTest {
                 });
 
         TimeUnit.SECONDS.sleep(10);
-    }
-
-
-    // Fix
-    @Test
-    public void testParallelPrefetchFix() throws InterruptedException {
-        Flux.just(1, 2, 3, 4, 5, 6, 7)
-                .doOnRequest(request -> logger.info("--- Request: " + request))
-                .doOnNext(data -> logger.info("send data: " + data))
-                .limitRate(1)
-                .parallel(2, 1)
-                .log()
-                .runOn(Schedulers.boundedElastic(), 2)
-                .subscribe(data -> {
-                    try {
-                        TimeUnit.SECONDS.sleep(2);
-                    } catch (InterruptedException e) {
-                        e.printStackTrace();
-                    }
-                    logger.info("Finished Process Data:" + data);
-                });
-
-        TimeUnit.SECONDS.sleep(10);
-    }
-
-
-    @Test
-    public void testPublishOnPrefetch() throws InterruptedException {
-        Flux.just(1, 2, 3, 4, 5)
-                .doOnRequest(request -> logger.info("--- Request: " + request))
-                .doOnNext(data -> logger.info("send data: " + data))
-                .limitRate(2)
-                .publishOn(Schedulers.boundedElastic(), 1)
-                .subscribe(data -> logger.info("Finished Process Data:" + data));
-
-        TimeUnit.SECONDS.sleep(1);
     }
 }
