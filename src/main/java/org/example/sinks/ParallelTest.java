@@ -42,10 +42,13 @@ public class ParallelTest {
         Flux.just(1, 2, 3, 4, 5, 6, 7)
                 .doOnRequest(request -> logger.info("--- Request: " + request))
                 .doOnNext(data -> logger.info("send data: " + data))
+                .log()
                 /*  Add limitRate */
                 .limitRate(1)
+//                .log()
                 // If we comment out this line, it only prefetches one more message
                 .map(data -> data)
+//                .log()
 
                 .parallel(2, 1)
                 .log()
@@ -62,6 +65,26 @@ public class ParallelTest {
         TimeUnit.SECONDS.sleep(10);
     }
 
+    @Test
+    public void testFusion() throws InterruptedException {
+        Flux.just(1, 2, 3)
+                .doOnRequest(request -> logger.info("--- Request: " + request))
+                .publishOn(Schedulers.boundedElastic(), 1)
+//                .log()
+                .publishOn(Schedulers.boundedElastic(), 1)
+//                .log()
+                .publishOn(Schedulers.boundedElastic(), 1)
+//                .log()
+                .subscribe(data -> {
+                    try {
+                        TimeUnit.SECONDS.sleep(1);
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
+                    logger.info("Finished Process Data:" + data);
+                });
+        TimeUnit.SECONDS.sleep(10);
+    }
 
     // Fix 1: use flatmap concurrency to replace parallel and remove limitRate
     // https://stackoverflow.com/questions/61676716/how-to-control-parallelism-of-flux-flatmap-mono
@@ -162,30 +185,30 @@ public class ParallelTest {
     @Test
     public void testFlatMapWithSubscriber() throws InterruptedException {
         CoreSubscriber<Integer> subscribers = new CoreSubscriber<>() {
-                private Subscription subscription = null;
+            private Subscription subscription = null;
 
-                @Override
-                public void onSubscribe(Subscription subscription) {
-                    this.subscription = subscription;
-                    subscription.request(1);
-                }
+            @Override
+            public void onSubscribe(Subscription subscription) {
+                this.subscription = subscription;
+                subscription.request(1);
+            }
 
-                @Override
-                public void onNext(Integer data) {
-                    logger.info("Request one more message");
-                    subscription.request(1);
-                }
+            @Override
+            public void onNext(Integer data) {
+                logger.info("Request one more message");
+                subscription.request(1);
+            }
 
-                @Override
-                public void onError(Throwable throwable) {
-                    logger.info("Error receiving.", throwable);
-                }
+            @Override
+            public void onError(Throwable throwable) {
+                logger.info("Error receiving.", throwable);
+            }
 
-                @Override
-                public void onComplete() {
-                    logger.info("Completed receiving.");
-                }
-            };
+            @Override
+            public void onComplete() {
+                logger.info("Completed receiving.");
+            }
+        };
 
         Flux.just(1, 2, 3, 4, 5, 6, 7, 8)
                 .doOnRequest(request -> {
